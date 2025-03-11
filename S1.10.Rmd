@@ -1,0 +1,538 @@
+---
+title: "S1.10 Code used to develop and present GLMM results"
+author: "Clare Vernon"
+date: "2025-03-11"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+  markdown: 
+    wrap: sentence
+---
+
+#### Download files and set working directory
+
+Set working direction and load in the files.
+Change the working directory as required.
+
+Load in the relevant data file.
+The data file used to construct the climate and fire-related GLMM models is available here: <https://github.com/ClareMVernon/ReviewShrubAlpineAustralia/blob/main/S2.4.%20Data%20of%20mean%20shrub%20cover-abundance%20used%20to%20construct%20GLMM.csv>
+
+```{r}
+library(readr)
+df_alldata <- read_csv("S2.4. Data of mean shrub cover-abundance used to construct GLMM.csv")
+```
+
+Install packages if required.
+
+oo <- options(repos = "https://cran.r-project.org/")
+utils::install.packages("Matrix")
+utils::install.packages("lme4")
+options(oo)
+utils::install.packages("https://cran.r-project.org/bin/windows/contrib/4.4/Matrix_1.7-0.zip", repos = NULL)
+utils::install.packages("https://cran.r-project.org/bin/windows/contrib/4.4/lme4_1.1-35.5.zip", repos = NULL)
+install.packages("mvabund")
+install.packages("MASS")
+install.packages("readxl")
+install.packages("ggplot2")
+install.packages("dplyr")
+install.packages("maps")
+install.packages("tidyr")
+install.packages("reshape2")
+install.packages("stringr")
+install.packages("ggrepel")
+install.packages("see")
+install.packages("devtools")
+devtools::install_github("thomasp85/patchwork")
+install.packages("PerformanceAnalytics")
+install.packages("faraway")
+install.packages("corrplot")
+install.packages(c("raster", "terra", "lubridate", "patchwork"))
+
+
+Load packages into the library.
+```{r}
+library(lme4)
+library(Matrix)
+library(mvabund)
+library(MASS)
+library(readxl)
+library(ggplot2)
+library(dplyr)
+library(maps)
+library(tidyr)
+library(reshape2)
+library(stringr)
+library(see)
+library(patchwork)
+library(PerformanceAnalytics)
+library(raster)
+library(terra)
+library(lubridate)
+library(patchwork)
+library(faraway)
+library(corrplot)
+library(FSA) # required for Dunns test of significant differences
+library(merDeriv)
+library(parameters)
+library(DHARMa)
+```
+
+#### 1. Climate GLMM Analysis
+
+```{r}
+df_model  <- df_alldata %>%
+  filter(!is.na(StandardisedAnnualChange )) # Remove NA values
+df_modela <- df_model %>% filter (Climate == "Yes")# Extracts the fire-only related rows 
+df_model <- df_modela %>% filter(Design == "BACI" | Design == "BA") # Omit CI designs, as this doesn't capture rate of change as t0 is not known. 
+
+df_model$StandardisedAnnualChange <- as.numeric(df_model$StandardisedAnnualChange)
+df_model$color <- with(df_model, ifelse(StandardisedAnnualChange > 0, "positive", ifelse(StandardisedAnnualChange < 0, "negative", "zero")))
+
+```
+
+Ensure all data is correctly formatted.
+Note some values scaled for GLMM
+
+```{r}
+df_model$Year.Final <- as.numeric(df_model$Year.Final)
+df_model$Year.Initial <- as.numeric(df_model$Year.Initial)
+df_model$TimeSpan <- as.numeric(df_model$TimeSpan)
+df_model$Elev_Est_Upper <- as.numeric(df_model$Elev_Est_Upper)
+df_model$Elev_Est_Lower <- as.numeric(df_model$Elev_Est_Lower)
+df_model$StandardisedAnnualChange.2<- as.numeric(df_model$StandardisedAnnualChange.2)
+df_model$Elev_Est_Upper <- as.numeric(df_model$Elev_Est_Upper)
+df_model$RainJan <- as.numeric(df_model$RainJan)
+df_model$RainJuly<- as.numeric(df_model$RainJuly)
+df_model$JanTempMax <- as.numeric(df_model$JanTempMax)
+df_model$JanTempMin <- as.numeric(df_model$JanTempMin)
+df_model$JulyTempMax <- as.numeric(df_model$JulyTempMax)
+df_model$JulyTempMin <- as.numeric(df_model$JulyTempMin)
+df_model$Elev_Est_Lowers <- scale(df_model$Elev_Est_Lower)
+df_model$Elev_Est_Uppers <- scale(df_model$Elev_Est_Upper)
+df_model$Year.Initial <- as.numeric(df_model$Year.Initial)
+df_model$Year.Final <- as.numeric(df_model$Year.Final)
+df_model$Year.Initials <- scale(df_model$Year.Initial)
+df_model$Year.Finals  <- scale(df_model$Year.Final)
+```
+
+Testing whether underlying data follows a normal distribution.
+
+```{r}
+qqnorm(df_model$StandardisedAnnualChange.2) # Non-linear, not a straight 45 degree line
+shapiro.test(df_model$StandardisedAnnualChange.2) # p < 0.05, non-linear
+df_model$Year.Final <- as.numeric(df_model$Year.Final)
+m_linear <- glmer(StandardisedAnnualChange.2 ~ Year.Final + (1 | Response.Level), data = df_model)
+```
+
+Outliers are present.
+Test whether removing outliers improves normal distribution.
+
+```{r}
+# Outliers are presented. Test whether removing outliers improves normal distribution. 
+df_model$StandardisedAnnualChange.2 <- as.numeric(df_model$StandardisedAnnualChange.2)
+shapiro.test(df_model$StandardisedAnnualChange.2)
+
+# Linear model of all data 
+lm.test.normalresid <- lm(StandardisedAnnualChange.2 ~ Year.Final, data = df_model)
+par(mfrow = c(2, 2))
+plot(lm.test.normalresid)
+par(mfrow = c(1, 1))
+cooksd <- cooks.distance(lm.test.normalresid)
+sample_size <- nrow(df_model)
+plot(cooksd, pch = "*", cex = 2, main = "Influential Obs by Cook's Distance")
+abline(h = 4/sample_size, col = "red")  # Add cutoff line
+text(x = seq_along(cooksd), y = cooksd, labels = ifelse(cooksd > 4/sample_size, seq_along(cooksd), ""), col = "red")
+influential <- which(cooksd > (4/sample_size))
+
+# Create a new dataframe without outliers
+df_model_no_outlier <- df_model[-influential, ] 
+head(df_model_no_outlier)
+hist(df_model_no_outlier$StandardisedAnnualChange.2)
+hist(df_model$StandardisedAnnualChange.2)
+lm.test.normalresid <- lm(StandardisedAnnualChange.2 ~ Year.Final, data = df_model_no_outlier)
+par(mfrow = c(2, 2))
+plot(lm.test.normalresid ) # Look at the results
+par(mfrow = c(1,1))
+
+# Does the normality improve if outliers are removed? 
+shapiro.test(df_model$StandardisedAnnualChange.2) # p < 0.05
+shapiro.test(df_model_no_outlier$StandardisedAnnualChange) # p < 0.05
+```
+
+**Outcome:** No significant improvement, p \<\< 0.001 for both models.
+Retain all datasets to better represent fire responses of shrubs.
+
+**Assess correlations:** highly correlated variables (r \> 0.70) are to be excluded from the same model as model terms.
+
+```{r}
+subset_corrdata <- df_model[, c("StandardisedAnnualChange.2",
+                                "Elev_Est_Lower", 
+                                "Elev_Est_Upper", 
+                                "Year.Initial", 
+                                "Year.Final",
+                                "RainJan", 
+                                "RainJuly", 
+                                "JanTempMax", 
+                                "JanTempMin", 
+                                "JulyTempMax", 
+                                "JulyTempMin")]
+res <- cor(subset_corrdata, method = c("spearman"))
+corrplot(res, tl.col = "red", bg = "White", tl.srt = 35, 
+         title = "\n\n Correlation plot of continous variables \n",
+         addCoef.col = "black", type = "lower") # Show correlation strengths. Same plot shown in S3 with relabelled variables for clarity. 
+p_corrchart <- chart.Correlation(subset_corrdata[,1:11], histogram=FALSE, method = c("spearman"), pch="19", exact = FALSE)
+p_corrchart # Alternative correlation plot showing the significance and distribution of data. 
+```
+
+**Assessing whether data differs based on study characteristics:** we used the Kruskal-Wallis test to examine whether the annual change in cover-abundance significantly differed between population scales, alpine zones of shrub species and ecosystem types.
+If p \< 0.05, we used Dunn's test to undertake pairwise comparisions.
+
+```{r}
+# Population Scale
+kruskal.test(StandardisedAnnualChange.2 ~ Response.Level, data = df_model)
+
+# Alpine zone of shrub species
+kruskal.test(StandardisedAnnualChange.2 ~ Alpine.Zone, data = df_model)
+
+# Ecosystem type 
+kruskal.test(StandardisedAnnualChange.2 ~ Aggregate.InitialES, data = df_model)
+dunnTest(StandardisedAnnualChange.2 ~ Aggregate.InitialES, data = df_model, method="bh")
+```
+
+**Testing model requirement:**
+
+1.  That \> 10-20 samples per treatment - this is met as all samples have temperature, rainfall and final sampling year.
+2.  That categorical variables have at least six levels. See code below.
+
+```{r}
+n_distinct(df_model$Study) # > 6
+n_distinct(df_model$Studysite) # > 6
+n_distinct(df_model$Response.Level) # < 6 levels, omit
+```
+
+#### 1.1. Development of Full Climate Model
+
+```{r}
+# Null model 
+m.null <- glmer(StandardisedAnnualChange.2 ~ (1 | Study) + (1 | Studysite) + (1 | Year.Finals) + (1 | Elev_Est_Lower), data = df_model)
+summary(m.null)
+AIC(m.null)
+
+# Overfitted model 
+m.overfit <- glmer(StandardisedAnnualChange.2 ~ JanTempMax + JulyTempMin + RainJan + RainJuly + (1 | Year.Finals) + (1 | Study) + (1 | Studysite) + (1 | Elev_Est_Lower), data = df_model)
+summary(m.overfit) # REML = 357.2
+AIC(m.overfit)
+
+# Test REML of all possible model combinations 
+m.x <- glmer(StandardisedAnnualChange.2 ~ JanTempMax + JulyTempMin + RainJan + RainJuly + (1 | Year.Finals) + (1 | Study) + (1 | Studysite) + (1 | Elev_Est_Lower), data = df_model)
+summary(m.x)
+m.x <- glmer(StandardisedAnnualChange.2 ~ JanTempMax + JulyTempMin + RainJan + RainJuly + (1 | Study), data = df_model)
+summary(m.x)
+m.x <- glmer(StandardisedAnnualChange.2 ~ JanTempMax + JulyTempMin + RainJan + RainJuly + (1 | Year.Finals), data = df_model)
+summary(m.x)
+m.x <- glmer(StandardisedAnnualChange.2 ~ JanTempMax + JulyTempMin + RainJan + RainJuly + (1 | Studysite), data = df_model)
+summary(m.x)
+m.x <- glmer(StandardisedAnnualChange.2 ~ JanTempMax + JulyTempMin + RainJan + RainJuly + (1 | Elev_Est_Lower), data = df_model)
+summary(m.x)
+m.x <- glmer(StandardisedAnnualChange.2 ~ JanTempMax + JulyTempMin + RainJan + RainJuly + (1 | Year.Finals) + (1 | Study), data = df_model)
+summary(m.x)
+m.x <- glmer(StandardisedAnnualChange.2 ~ JanTempMax + JulyTempMin + RainJan + RainJuly + (1 | Year.Finals) + (1 | Studysite), data = df_model)
+summary(m.x)
+m.x <- glmer(StandardisedAnnualChange.2 ~ JanTempMax + JulyTempMin + RainJan + RainJuly + (1 | Year.Finals) + (1 | Elev_Est_Lower), data = df_model)
+summary(m.x)
+m.x <- glmer(StandardisedAnnualChange.2 ~ JanTempMax + JulyTempMin + RainJan + RainJuly + (1 | Study) + (1 | Studysite), data = df_model)
+summary(m.x)
+m.x <- glmer(StandardisedAnnualChange.2 ~ JanTempMax + JulyTempMin + RainJan + RainJuly + (1 | Studysite) + (1 | Elev_Est_Lower), data = df_model)
+summary(m.x)
+m.x <- glmer(StandardisedAnnualChange.2 ~ JanTempMax + JulyTempMin + RainJan + RainJuly + (1 | Study) + (1 | Elev_Est_Lower), data = df_model)
+summary(m.x)
+m.x <- glmer(StandardisedAnnualChange.2 ~ JanTempMax + JulyTempMin + RainJan + RainJuly + (1 | Year.Finals)+ (1 | Studysite) + (1 | Elev_Est_Lower), data = df_model)
+summary(m.x)
+m.x <- glmer(StandardisedAnnualChange.2 ~ JanTempMax + JulyTempMin + RainJan + RainJuly + (1 | Year.Finals) + (1 | Study) + (1 | Studysite), data = df_model)
+summary(m.x)
+m.x <- glmer(StandardisedAnnualChange.2 ~ JanTempMax + JulyTempMin + RainJan + RainJuly + (1 | Year.Finals) + (1 | Study) + (1 | Elev_Est_Lower), data = df_model)
+summary(m.x)
+m.x <- glmer(StandardisedAnnualChange.2 ~ JanTempMax + JulyTempMin + RainJan + RainJuly + (1 | Study) + (1 | Studysite) + (1 | Elev_Est_Lower), data = df_model)
+summary(m.x)
+
+# Reduce by removing RE with variance = 0
+# Elev_Est_Lower first
+m.reduce1 <- glmer(StandardisedAnnualChange.2 ~ JanTempMax + JulyTempMin + RainJan + RainJuly + (1 | Year.Finals) + (1 | Study) + (1 | Studysite), data = df_model)
+summary(m.reduce1)
+AIC(m.reduce1) # AIC improved 
+
+# Reduce further, test AIC and variance when studysite is removed
+m.reduce2 <- glmer(StandardisedAnnualChange.2 ~ JanTempMax + JulyTempMin + RainJan + RainJuly + (1 | Year.Finals) + (1 | Study), data = df_model)
+summary(m.reduce2)
+AIC(m.reduce2) # AIC note improvement, AIC > 10
+
+# Reduce further, test AIC and variance when studysite is retained, study ID removed
+m.reduce3 <- glmer(StandardisedAnnualChange.2 ~ JanTempMax + JulyTempMin + RainJan + RainJuly + (1 | Year.Finals) + (1 | Studysite), data = df_model) # FINAL MODEL CHOSEN
+summary(m.reduce3)
+AIC(m.reduce3) # AIC note improvement, AIC within 2 units of m.reduce1. This will be the chosen model without interaction effect. 
+
+# Reduce further, test AIC and variance when studysite is retained, study ID retained, remove year
+m.reduce4 <- glmer(StandardisedAnnualChange.2 ~ JanTempMax + JulyTempMin + RainJan + RainJuly + (1 | Study) + (1 | Studysite), data = df_model)
+summary(m.reduce4)
+AIC(m.reduce4) # AIC note improvement, AIC within 2 units of m.reduce1
+
+# Reduce further, test AIC and variance when studysite is retained, remove study ID retained and remove year
+m.reduce5 <- glmer(StandardisedAnnualChange.2 ~ JanTempMax + JulyTempMin + RainJan + RainJuly + (1 | Studysite), data = df_model)
+summary(m.reduce5)
+AIC(m.reduce5) # AIC note improvement, AIC within 2 units of m.reduce1
+
+# Assessment of non-interaction model performance
+m.final.noninteract <- m.reduce3
+model_parameters(m.final.noninteract )
+AIC(m.final.noninteract)
+anova(m.final.noninteract )
+model_parameters(m.final.noninteract )
+
+### Creating and assessing interaction terms
+m.reduce1.interaction.0 <- glmer(StandardisedAnnualChange.2 ~ JanTempMax + JulyTempMin + RainJan + RainJuly + (1 | Year.Finals) + (1 | Studysite), data = df_model) 
+m.reduce1.interaction.1 <- glmer(StandardisedAnnualChange.2 ~ JanTempMax + JulyTempMin * RainJuly + RainJan  + (1 | Year.Finals) + (1 | Studysite), data = df_model)  # Model 8
+m.reduce1.interaction.2 <- glmer(StandardisedAnnualChange.2 ~ JanTempMax * RainJan + JulyTempMin  + RainJuly + (1 | Year.Finals) + (1 | Studysite), data = df_model)
+
+AIC(m.reduce1.interaction.0, m.reduce1.interaction.1, m.reduce1.interaction.2)
+model_parameters(m.reduce1.interaction.0)
+model_parameters(m.reduce1.interaction.1)
+model_parameters(m.reduce1.interaction.2) # JulyTempMin significant, as is interaction effect chosen model 
+
+# Final model is m.reduce1.interaction.1 <- glmer(StandardisedAnnualChange.2 ~ JanTempMax + JulyTempMin * RainJuly + RainJan  + (1 | Year.Finals) + (1 | Studysite), data = df_model)
+m.final <-  glmer(StandardisedAnnualChange.2 ~ JanTempMax + JulyTempMin * RainJuly + RainJan  + (1 | Year.Finals) + (1 | Studysite), data = df_model)
+summary(m.final)
+model_parameters(m.final)
+AIC(m.final, m.reduce1.interaction.0)
+anova(m.final, m.reduce1.interaction.0)
+
+# Testing performance of final model 
+MuMIn::r.squaredGLMM(m.final)
+sim_res <- simulateResiduals(m.final)
+plot(sim_res)
+testUniformity(sim_res)
+testDispersion(sim_res) # No evidence of problematic dispersion, use Wald Z and chi-sq tests
+model_parameters(m.final)
+summary(m.final)
+AIC(m.final)
+```
+
+#### 1.2. Development of Reduced Climate Model.
+
+```{r}
+m.final2 <-  glmer(StandardisedAnnualChange.2 ~ JulyTempMin * RainJuly + (1 | Year.Finals) + (1 | Studysite), data = df_model)
+model_parameters(m.final2) 
+summary(m.final2)
+AIC(m.final, m.final2)
+
+# Testing performance of final model 
+MuMIn::r.squaredGLMM(m.final2)
+sim_res <- simulateResiduals(m.final2)
+plot(sim_res)
+testUniformity(sim_res)
+testDispersion(sim_res) # No evidence of problematic dispersion, use Wald Z and chi-sq tests
+model_parameters(m.final2)
+summary(m.final2)
+
+AIC(m.final) 
+AIC(m.final2)
+AIC(m.final) - AIC( m.final2)
+
+# Model validation: check that AIC increases when fixed effect terms are removed
+m.final2.NoInteract <-  glmer(StandardisedAnnualChange.2 ~ JulyTempMin + RainJuly + (1 | Year.Finals) + (1 | Studysite), data = df_model)
+AIC(m.final2.NoInteract )
+model_parameters(m.final2.NoInteract )
+
+m.final2.reduce.RainJuly <-  glmer(StandardisedAnnualChange.2 ~ RainJuly + (1 | Year.Finals) + (1 | Studysite), data = df_model)
+AIC(m.final2.reduce.RainJuly )
+model_parameters(m.final2.reduce.RainJuly )
+
+m.final2.JulyTemp <-  lmer(StandardisedAnnualChange.2 ~ JulyTempMin  + (1 | Year.Finals) + (1 | Studysite), data = df_model)
+AIC(m.final2.JulyTemp)
+model_parameters(m.final2.JulyTemp )
+
+AIC(m.final2)
+model_parameters(m.final2)
+
+```
+
+Plotting the results
+
+```{r}
+median(df_model$JulyTempMin)
+p1.JulyTemp <- ggplot (data = df_model, aes(y = StandardisedAnnualChange.2, x = JulyTempMin)) + geom_point() + geom_smooth(method = lm) + theme_classic() + xlab("Average monthly minimum temperature °C, July (winter)") + ylab("Annual change cover-abundance (%)") + ggtitle("a") + geom_vline(xintercept = -1.5, colour="grey", linetype = "longdash", size= 1)  +  geom_hline(yintercept = 0, colour="red", linetype = "longdash", size= 1)
+p1.JulyTemp
+
+median(df_model$RainJuly)
+p1.JulyRain <- ggplot (data = df_model, aes(y = StandardisedAnnualChange.2, x = RainJuly)) + geom_point() + geom_smooth(method = lm) + theme_classic() + xlab("Total monthly precipitation, mm, July (winter)") + ylab("Annual change cover-abundance (%)") + ggtitle("b") + geom_vline(xintercept = 118.2904, colour="grey", linetype = "longdash", size= 1)  +  geom_hline(yintercept = 0, colour="red", linetype = "longdash", size= 1)
+p1.JulyRain
+
+p1.cover <- ggplot (data = df_model, aes(y = StandardisedAnnualChange.2, x = as.numeric(Year.Final))) + geom_point() + geom_smooth(method = lm) + theme_classic() + xlab("Year") + ylab("Annual change cover-abundance (%)") +  geom_hline(yintercept = 0, colour="red", linetype = "longdash", size= 1) + ggtitle("c")
+p1.cover
+
+p1.JulyTemp | p1.JulyRain | p1.cover
+
+# Cover change through time 
+corr <- cor.test(x=df_model$Year.Final, y=df_model$StandardisedAnnualChange.2, method = 'spearman')
+corr
+```
+
+#### 2. Fire GLMM Analysis
+
+Select relevant studies from the dataset related to fire.
+
+```{r}
+df_model <- df_alldata %>% filter (Treatment_Thematic == "Fire" |
+                      Treatment_Thematic == "Fire + Grazing" | 
+                       Treatment_Thematic ==  "Fire + Restoration" |
+                      Treatment_Thematic == "Fire + Climate change" ) # Extracts the fire-only related rows 
+df_model <- df_model %>% filter(Design == "BACI" | Design == "BA") # Omit CI designs, as this doesn't capture rate of change as t0 is not known. 
+df_model <- df_model %>% filter(Control.Exposure == "Exposure") # Omit Control i.e. unburnt sites. 
+df_model$TimeSinceFire <- df_model$TimeSinceFire.New # Rename to something more sensible 
+```
+
+Ensure that all variables are interpreted as the correct data type.
+
+```{r}
+df_model$TimeSinceFire <- as.numeric(df_model$TimeSinceFire)
+df_model$StandardisedAnnualChange <- as.numeric(df_model$StandardisedAnnualChange)
+df_model$Year.Final <- as.numeric(df_model$Year.Final)
+df_model$Year.Initial <- as.numeric(df_model$Year.Initial)
+df_model$TimeSpan <- as.numeric(df_model$TimeSpan)
+df_model$TimeSinceFire <- as.numeric(df_model$TimeSinceFire)
+df_model$Elev_Est_Upper <- as.numeric(df_model$Elev_Est_Upper)
+df_model$Elev_Est_Lower <- as.numeric(df_model$Elev_Est_Lower)
+df_model$TimeSinceFire <- as.numeric(df_model$TimeSinceFire)
+df_model$StandardisedAnnualChange.2<- as.numeric(df_model$StandardisedAnnualChange.2)
+```
+
+Identify outliers, and test whether removing outliers improves assumption of normality.
+
+```{r}
+# All values included
+lm.test.normalresid <- lm(StandardisedAnnualChange ~ TimeSinceFire, data = df_model)
+par(mfrow = c(2, 2))
+plot(lm.test.normalresid)
+par(mfrow = c(1,1))
+cooksd <- cooks.distance(lm.test.normalresid)
+sample_size <- nrow(df_model)
+plot(cooksd, pch="*", cex=2, main="Influential Obs by Cooks distance")  # plot cook's distance
+abline(h = 4/sample_size, col="red")  # add cutoff line
+text(x=1:length(cooksd)+1, y=cooksd, labels=ifelse(cooksd>4/sample_size, names(cooksd),""), col="red")  # add labels
+
+# Identify and remove outliers in a new dataframe
+influential <- as.numeric(names(cooksd)[(cooksd > (4/sample_size))])
+df_model_no_outlier <- df_model[-influential, ] # Test dataframe
+lm.test.normalresid.no.outlier <- lm(StandardisedAnnualChange ~ TimeSinceFire, data = df_model_no_outlier) # Rerun model 
+par(mfrow = c(2, 2))
+plot(lm.test.normalresid.no.outlier) # Look at the results
+par(mfrow = c(1,1))
+
+shapiro.test(df_model$StandardisedAnnualChange)
+shapiro.test(df_model_no_outlier$StandardisedAnnualChange)
+```
+
+**Outcome:** both dataframes are non-normal (p \<\< 0.001).
+Decision to retain all data for full representation of results.
+
+Test of normal distribution of residuals.
+
+```{r}
+glm.test.normalresid <- glm(StandardisedAnnualChange.2~ TimeSinceFire, data = df_model)
+par(mfrow = c(2, 2))
+plot(lm.test.normalresid)
+par(mfrow = c(1,1))
+```
+
+**Assessing whether data differs based on study characteristics:** we used the Kruskal-Wallis test to examine whether the annual change in cover-abundance significantly differed between population scales, alpine zones of shrub species and ecosystem types.
+If p \< 0.05, we used Dunn's test to undertake pairwise comparisions.
+
+```{r}
+# Alpine zone of shrub species
+kruskal.test(StandardisedAnnualChange.2 ~ Alpine.Zone, data = df_model)
+
+# Ecosystem type 
+kruskal.test(StandardisedAnnualChange.2 ~ Aggregate.InitialES, data = df_model)
+dunnTest(StandardisedAnnualChange.2 ~ Aggregate.InitialES, data = df_model, method="bh")
+```
+
+**Testing model requirement:**
+
+1.  That \> 10-20 samples per treatment - this is met as all samples have temperature, rainfall and final sampling year.
+2.  That categorical variables have at least six levels. See code below.
+
+```{r}
+n_distinct(df_model$Study) # > 6
+n_distinct(df_model$Studysite) # > 6
+n_distinct(df_model$Response.Level) # < 6 levels, omit
+```
+
+Correlation plot of numerical data.
+
+```{r}
+subset_corrdata <- df_model[, c("StandardisedAnnualChange.2",
+                                "Elev_Est_Lower", 
+                                "Elev_Est_Upper", 
+                                "Year.Initial", 
+                                "Year.Final", 
+                                "TimeSinceFire",
+                                "RainJan", 
+                                "RainJuly", 
+                                "JanTempMax", 
+                                "JanTempMin", 
+                                "JulyTempMax", 
+                                "JulyTempMin")]
+res <- cor(subset_corrdata)
+round(res, 2)
+p_corrchart <- chart.Correlation(subset_corrdata[,1:12], histogram=TRUE, method = c("spearman"), pch="19", exact = FALSE)
+```
+
+#### 2.1. Fire Model
+
+```{r}
+m1.null <- lmer(StandardisedAnnualChange ~ 1 + (1 | JanTempMax) + (1 | Year.Final) + (1 | RainJuly) + (1 | Elev_Est_Lower), data = df_model, REML = FALSE)
+summary(m1.null)
+anova(m1.null)
+m.final <- m1.null
+
+# Testing performance of final model 
+MuMIn::r.squaredGLMM(m.final)
+sim_res <- simulateResiduals(m.final)
+plot(sim_res)
+testUniformity(sim_res)
+testDispersion(sim_res) # No evidence of problematic dispersion, use Wald Z and chi-sq tests
+model_parameters(m.final)
+summary(m.final)
+
+```
+
+#### 2.2. Fire Trait Model
+
+```{r}
+# Forward selection procedure for random effects
+m1 <- glmer(StandardisedAnnualChange ~ TimeSinceFire + Seeder.Resprouter2 + (1 | JanTempMax) + 1, data = df_model)
+m2 <- glmer(StandardisedAnnualChange ~ TimeSinceFire + Seeder.Resprouter2 + (1 | JanTempMax) + (1 | Year.Final) + 1, data = df_model)
+m3 <- glmer(StandardisedAnnualChange ~ TimeSinceFire + Seeder.Resprouter2 + (1 | JanTempMax) + (1 | Year.Final) + (1 | RainJuly) + 1, data = df_model)
+m4 <- glmer(StandardisedAnnualChange ~ TimeSinceFire + Seeder.Resprouter2 + (1 | JanTempMax) + (1 | RainJuly) + 1, data = df_model)
+m5 <- glmer(StandardisedAnnualChange ~ TimeSinceFire + Seeder.Resprouter2 + (1 | JanTempMax) + (1 | Year.Final) + (1 | RainJuly) + (1 | Elev_Est_Lower) + 1, data = df_model)
+m6 <- glmer(StandardisedAnnualChange ~ TimeSinceFire + Seeder.Resprouter2 + (1 | Year.Final) + (1 | RainJuly) + (1 | Elev_Est_Lower) + 1, data = df_model)
+m7 <- glmer(StandardisedAnnualChange ~ TimeSinceFire + Seeder.Resprouter2 + (1 | JanTempMax) + (1 | Year.Final) + (1 | Elev_Est_Lower) + 1, data = df_model)
+m8 <- glmer(StandardisedAnnualChange ~ TimeSinceFire + Seeder.Resprouter2 + (1 | Year.Final) + (1 | RainJuly) + (1 | Elev_Est_Lower) + 1, data = df_model)
+m9 <- glmer(StandardisedAnnualChange ~ TimeSinceFire + Seeder.Resprouter2 + (1 | RainJuly) + (1 | Elev_Est_Lower) + 1, data = df_model)
+
+AIC(m1, m2, m3, m4, m5, m6, m7, m8, m9, m1.null) # m.null lowest AIC, with m9 lowest AIC of all Fire Trait Model iterations.
+anova(m1, m2, m3, m4, m5, m6, m7, m8, m9, m1.null)
+
+summary(m9)
+m.final <- m9
+```
+
+```{r}
+# Testing performance of final model 
+MuMIn::r.squaredGLMM(m.final)
+sim_res <- simulateResiduals(m.final)
+plot(sim_res)
+testUniformity(sim_res)
+testDispersion(sim_res) # No evidence of problematic dispersion, use Wald Z and chi-sq tests
+model_parameters(m.final)
+summary(m.final)
+```
