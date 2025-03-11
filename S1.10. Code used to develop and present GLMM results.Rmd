@@ -10,11 +10,10 @@ editor_options:
 #### Download files and set working directory
 The files are available on GitHub, here: https://github.com/ClareMVernon/ReviewShrubAlpineAustralia
 
-Set working direction and load in the files. Change the working directory as required. 
+Change the working directory as required and load the data file. This file contains data for both the 
 ```{r}
 library(readr)
-setwd("C:/Users/clare/OneDrive - Deakin University/3_Shrubs/Results June 2024") # Change the working directory as required
-df_alldata <- read_csv("C:/Users/clare/OneDrive - Deakin University/3_Shrubs/Paper Submissions/Appendicies/S2.4. Data of mean shrub cover-abundance used to construct GLMM.csv")
+df_alldata <- read_csv("~/S2.4. Data of mean shrub cover-abundance used to construct GLMM.csv")
 view(df_alldata)
 ```
 
