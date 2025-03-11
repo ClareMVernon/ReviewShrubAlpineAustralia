@@ -1,0 +1,494 @@
+---
+title: "S1.9. Code used to analyse summary statistics and count data of all data, and visualise systematic review results."
+author: "Clare Vernon"
+date: "2025-03-11"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## 1. Set working directory, loading data and packages
+
+Load in the relevant data file. The data file used to construct the climate and fire-related GLMM models is available here:
+
+Load the data into R:
+
+```{r}
+library(readr)
+df <- read_csv("S2.3 Dataset of results included in systematic review meta-analysis.csv")
+head(df)
+```
+
+### 1.1. Install packages, and load packages into library.
+
+May need to install the following packages: install.packages("rnaturalearth") install.packages("rnaturalearthdata") install.packages("ggspatial") install.packages("giscoR") install.packages("maps") install.packages("ggrepel") install.packages("maps") install.packages("ggrepel") install.packages("writexl") install.packages("MuMIn") install.packages("car") install.packages("doBy") install.packages("reshape2") install.packages(esc) install.packages("GGally") install.packages("ggtext") install.packages("ozmaps")
+
+Package for drawing NSW / Victorian borders: install.packages("devtools") devtools::install_github("thomasp85/patchwork") install.packages("meta") install.packages("dmetar") install.packages("esc")
+
+Needed for Orchard, see <https://daniel1noble.github.io/orchaRd/introduction> rm(list = ls()) devtools::install_github("daniel1noble/orchaRd", ref = "main", force = TRUE) pacman::p_load(devtools, tidyverse, metafor, patchwork, R.rsp, orchaRd, emmeans, ape, phytools, flextable)
+
+Once installed, load packages into library.
+
+```{r}
+library("ggplot2")
+library("sf")
+library("rnaturalearth")
+library("rnaturalearthdata")
+library("ggspatial")
+library("giscoR")
+library("dplyr")
+library("maps")
+library("ggrepel")
+library("tidyr")
+library("reshape2")
+library("dplyr")
+library("stringr")
+library(see)
+library(MuMIn)
+library(car)
+library(doBy)
+library(forcats)
+library(writexl)
+library(ggtext)
+library(patchwork)
+library("cowplot")
+library(orchaRd)
+library(emmeans)
+library(flextable)
+library(devtools)
+library(meta)
+library(dmetar)
+library(esc)
+library(clubSandwich)
+
+# Load data
+library(readr)
+df <- read_csv("S2.3 Dataset of results included in systematic review meta-analysis.csv")
+
+# Create unique identifier for later on
+df$AuthorStudyID <-  paste(df$`CADIMA Ref`, df$Author, df$`Study ID`, sep = "_")
+
+# Remove any NA
+df$Record.type <- df$StudyType
+df$Record.type <- str_replace(df$Record.type, "Unpublished", "Private dataset")
+
+```
+
+## 2. Characterising studies included in the review, meta-analysis and linear models.
+
+### 2.1. Figure 2. Map of studies.
+
+```{r}
+# Setting up- download the mapping data from online. 
+theme_set(theme_bw()) # for ggplot2
+world <- ne_countries(scale = "medium", returnclass = "sf")
+class(world)
+worldmap <- ne_countries(scale = 'medium', type = 'map_units', 
+                    returnclass = 'sf')
+head(worldmap[c('name', 'continent')])
+ggplot() + geom_sf(data=worldmap) + theme_bw() # World map
+aus <- worldmap[worldmap$name == 'Australia',]
+
+
+# NSW / Vic extents
+ggplot() + geom_sf(data = worldmap) + # This is the map with results 
+  coord_sf(xlim = c(144, 151), ylim = c(-35.5, -39), expand = FALSE) # Basic map,  now to overlay count data
+
+# Add the NSW / Victorian border using ozmap
+aus_states <- ozmaps::ozmap_states
+nsw_vic_border <- aus_states[aus_states$NAME %in% c("New South Wales", "Victoria", "Tasmania"), ]
+map_mainland <- ggplot() +
+  geom_sf(data = aus_states, fill = "white", color = "grey") +  # Map outline
+  geom_sf(data = nsw_vic_border, color = "grey", size = 1.2) +  # Border overlay
+  coord_sf(xlim = c(144, 151), ylim = c(-35.5, -39), expand = FALSE) +  # Zoomed region
+  theme_classic()
+map_mainland
+
+# Organising the data 
+df_mapcount <- df %>%
+  group_by(site.map) %>% # group by each suty site region
+  summarise(Count = n_distinct(AuthorStudyID), Lat = unique(coord.x.map), Long = unique(coord.y.map)) # How many studies per location? 
+df_mapcount
+
+unique(df_mapcount$site.map)
+
+# mainland region
+mainland_plotted <- map_mainland +
+  coord_sf(xlim = c(142, 152), ylim = c(-35, -44), expand = FALSE) + annotation_north_arrow(location = "br", which_north = "true")
+mainland_plotted 
+
+# draw a blank mainland for inset in the NSW and Victorian maps
+
+# box for nsw
+nsw_box <- data.frame(
+  xmin = 148, xmax = 149, 
+  ymin = -35.8, ymax = -36.58
+)
+# box for vic
+vic_box <- data.frame(
+  xmin = 146.5, xmax = 148.5, 
+  ymin = -36.5, ymax = -37.8
+)
+# box for tas1
+tas1_box <- data.frame(
+  xmin = 145.8, xmax = 147.1, 
+  ymin = -41.4, ymax = -42
+)
+# box for tas2
+tas2_box <- data.frame(
+  xmin = 146.6, xmax = 147.6, 
+  ymin = -42.8, ymax = -43.4
+) 
+
+# Add to the map
+region_map <- mainland_plotted + 
+  geom_rect(data = nsw_box, 
+            aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax), 
+            fill = NA, color = "#009E73", size = 1.2) +  # NSW
+  geom_rect(data = vic_box, 
+            aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax), 
+            fill = NA, color = "#D55E00", size = 1.2) + # VIC
+  geom_rect(data = tas1_box, 
+            aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax), 
+            fill = NA, color =  "#E69F00", size = 1.2)  + # Tas1
+  geom_rect(data = tas2_box, 
+            aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax), 
+            fill = NA, color =  "#0072B2", size = 1.2) + fixed_plot_aspect(ratio = 1) + annotation_scale()  # Tas2 +
+region_map <- region_map +  annotate("text", x = 147, y = -35.5, label = "New South Wales", size = 4, fontface = "bold", colour = "#009E73") +
+  annotate("text", x = 146.5, y = -36.2, label = "Victoria", size = 4, fontface = "bold", colour = "#D55E00") +
+  annotate("text", x = 145, y = -41, label = "Northern Tasmania", size = 4, fontface = "bold", colour = "#E69F00") +
+  annotate("text", x = 146, y = -42.5, label = "Sothern Tasmania", size = 4, fontface = "bold", colour = "#0072B2") +
+  fixed_plot_aspect(ratio = 1) + 
+  xlab("Longitude") + ylab("Latitude")
+
+# Now make 3 maps to show the regions, and then have the 'zoomed out' (mainland) map inset
+# NSW first
+mainland_nsw <- map_mainland +
+  coord_sf(xlim = c(146, 149), ylim = c(-35.5, -36.58), expand = FALSE)
+mainland_nsw 
+map_nsw  <- mainland_nsw +
+  geom_point(data = df_mapcount, aes(x = Long, y = Lat, size = Count)) + 
+  geom_text(data = df_mapcount, aes(x = Long, y = Lat, label = site.map), 
+            size = 4, check_overlap = TRUE, hjust = -0.1, vjust = -0.6) +
+  scale_size_continuous(range = c(1, 10)) + theme(legend.position="none") +
+  coord_sf(xlim = c(148, 149), ylim = c(-35.8, -36.58), expand = FALSE) + annotation_scale() +
+  theme(panel.border = element_rect(colour = "#009E73", fill=NA, linewidth=2)) +
+  ggtitle("New South Wales") + xlab("Longitude") + ylab("Latitude")
+map_nsw <- map_nsw + fixed_plot_aspect(ratio = 1)
+map_nsw 
+
+# Vic next
+map_vic <- map_mainland +
+  geom_point(data = df_mapcount, aes(x = Long, y = Lat, size = Count)) +
+  geom_text(data = df_mapcount, aes(x = Long, y = Lat, label = site.map), 
+            size = 4, check_overlap = TRUE, hjust = -0.15, vjust = -0.4)  +
+  scale_size_continuous(range = c(1, 10)) + theme(legend.position="none") +
+  coord_sf(xlim = c(146.5, 148.5), ylim = c(-36.5, -37.8), expand = FALSE) + annotation_scale() +
+  theme(panel.border = element_rect(colour =  "#D55E00", fill=NA, linewidth=2)) +
+  ggtitle("Victoria")   + xlab("Longitude") + ylab("Latitude") 
+map_vic <- map_vic + fixed_plot_aspect(ratio = 1)
+map_vic
+
+# Tas last
+map_tas1 <- map_mainland +
+  geom_point(data = df_mapcount, aes(x = Long, y = Lat, size = Count)) +
+  geom_text(data = df_mapcount, aes(x = Long, y = Lat, label = site.map), 
+            size = 4, check_overlap = TRUE, hjust = -0.2) +
+  scale_size_continuous(range = c(1, 10)) + theme(legend.position="none") +
+  coord_sf(xlim = c(145.8, 147.1), ylim = c(-41.4, -42), expand = FALSE) + annotation_scale() +
+  theme(panel.border = element_rect(colour =  "#E69F00", fill=NA, linewidth=2)) +
+  ggtitle ("Northen Tasmania") + xlab("Longitude") + ylab("Latitude") 
+map_tas1 <- map_tas1 + fixed_plot_aspect(ratio = 1)
+map_tas1
+
+map_tas2 <- map_mainland +
+  geom_point(data = df_mapcount, aes(x = Long, y = Lat, size = Count)) +
+  geom_text(data = df_mapcount, aes(x = Long, y = Lat, label = site.map), 
+            size = 4, check_overlap = TRUE, hjust = -0.2) +
+  scale_size_continuous(range = c(1, 10)) +
+  coord_sf(xlim = c(146.6, 147.6), ylim = c(-42.8, -43.4), expand = FALSE) + annotation_scale() +
+  theme(panel.border = element_rect(colour =  "#0072B2", fill=NA, linewidth=2)) +
+  ggtitle("Southern Tasmania") + xlab("Longitude") + ylab("Latitude")
+  
+map_tas2 <- map_tas2 + fixed_plot_aspect(ratio = 1)
+map_tas2
+
+p1 <- ((map_nsw / map_vic)) + plot_layout(guides = 'collect', axes = "collect")
+p2 <- ((map_tas1 / map_tas2)) + plot_layout(guides = 'collect', axes = "collect")
+final_figure <- p1 | region_map | p2
+final_figure
+```
+
+### 2.2. Figure 3. Count of number of reports, for each year of publication.
+
+```{r}
+p1 <- df %>%
+  group_by(PubYear, Record.type, Treatment_Thematic) %>%
+  summarise(Count = n_distinct(Study)) %>%
+  ggplot(aes(x = PubYear, y = Count, fill = Record.type)) +
+  geom_bar(position = "stack", stat="identity") +
+  scale_fill_manual(values =  c("#D55E00", "#009E73", "#0072B2" )) +
+  theme_classic() +
+  ylab("Count") +
+  xlab("Publication year") +
+  guides(fill=guide_legend(title="Record type")) +
+  ggtitle("All driving processes")
+p1 + ggtitle("")
+
+# Does the impact of a driving process (promote, reduce, no effect) significantly differ between ecosystem types? 
+test <- chisq.test(table(df$Aggregate.InitialES, df$QualDirection))
+test
+```
+
+**Outcome of chi-squared tests:** significant differences between year of publication and direction of change.
+
+## 3. Systematic review
+
+### 3.1. Count of results, for each species type.
+
+The table produced is presented in **Supplementary Material S3. Extended results.**
+
+```{r}
+df_x <- df %>%
+  filter(Response.Level == "Species") %>%
+  group_by(Treatment_Thematic, Response, Metric.Aggregate, QualDirection, Family, Alpine.Zone, `Groundwater Association`, Seeder.Resprouter) %>%
+  summarise(Reports = n_distinct(UniqueCode), Studies = n_distinct(Study), )
+df_x
+```
+
+### 3.2. Figure 4. Count of studies reporting a promoting, reducing and no effect for all driving processes, and for driving processes grouped under climate change.
+
+```{r}
+# Graph a. All driving processes. 
+df_y <- df %>%
+  group_by(Treatment_Thematic, Response.Level, QualDirection) %>%
+  summarise(Count = n_distinct(UniqueCode)) # Filter by metric
+colours <- c("#0072B2", "#009E73", "#D55E00", "#56B4E9" ) # ID colours
+df_y_neg <- df_y %>% 
+  mutate(
+    Count = case_when(
+      QualDirection == "Reduce"  ~ -Count,
+      TRUE ~ Count
+    ),)
+unique(df_y_neg$Treatment_Thematic)
+df_y_neg$Treatment_Thematic <- factor(df_y_neg$Treatment_Thematic, 
+                                      levels = c("Tourism", 
+                                                 "Soil / substrate", 
+                                                 "Grazing", 
+                                                 "Fire + Grazing", 
+                                                 "Fire + Exotic species planted, fertiliser applied",
+                                                 "Fire + Climate change", 
+                                                 "Fire", 
+                                                 "Climate change + Grazing", 
+                                                 "Climate change"))
+df_y_neg$Treatment_Thematic <- str_wrap(df_y_neg$Treatment_Thematic, width = 20)
+df_y_neg2 <- df_y_neg %>% 
+  filter(!is.na(Treatment_Thematic))
+
+p_all <- df_y_neg2 %>% 
+  ggplot(aes(x = Treatment_Thematic, y = Count, fill = QualDirection)) +
+  geom_bar(position = "stack", stat = "identity") +
+  scale_fill_manual(values = colours) +
+  theme_classic() +
+  coord_flip() +
+  guides(fill=guide_legend(title="Shrub response")) +
+  ggtitle("All population levels") +
+  ylab("Count of studies") + xlab("Driving process") +
+    scale_x_discrete(labels = function(x) str_wrap(x, width = 20)) +
+  theme(legend.position="none")
+p_all 
+
+# Graph b. Climate change-related driving processes only. 
+df_y <- df %>%
+  filter(Treatment_Thematic ==  "Climate change" ) %>%
+  group_by(TreatmentAggregate2, Response.Level, QualDirection) %>%
+  summarise(Count = n_distinct(UniqueCode)) 
+colours <- c("#0072B2", "#009E73", "#D55E00", "#56B4E9" )
+head(df_y)
+df_y_neg <- df_y %>% 
+  mutate(
+    Count = case_when(
+      QualDirection == "Reduce"  ~ -Count,
+      TRUE ~ Count
+    ),)
+unique(df_y_neg$TreatmentAggregate2)
+
+ 
+df_y_neg$TreatmentAggregate2 <- factor(df_y_neg$TreatmentAggregate2, 
+                                      levels = c("Wind speed + Adiabatic lapse rate"  , 
+                                                 "Temperature (increase)" , 
+                                                 "Snowmelt (earlier)"  , 
+                                                 "Snow depth (decrease) + Temperature (increase)", 
+                                                 "Rainfall (increase)",
+                                                 "Rainfall (decrease) + Temperature (increase)", 
+                                                 "Drought (ongoing)", 
+                                                 "Drought (historical)"))
+df_y_neg$Treatment2 <- str_wrap(df_y_neg$TreatmentAggregate2, width = 20)
+p_cc <- df_y_neg %>% 
+  ggplot(aes(x = TreatmentAggregate2, y = Count, fill = QualDirection)) +
+  geom_bar(position = "stack", stat = "identity") +
+  scale_fill_manual(values = colours) +
+  theme_classic() +
+  coord_flip() +  
+  guides(fill=guide_legend(title="Direction of change")) +
+  ggtitle("Driving processes grouped under 'Climate change'") +
+  scale_x_discrete(labels = function(x) str_wrap(x, width = 20)) +
+  ylab("Count of studies") + xlab("Driving process")
+p_cc  
+
+# Combining both into Figure 4. 
+p_allpop <- p_all | p_cc 
+p_final <- p_allpop + plot_layout(guides = 'collect', axes = "collect", widths = c(1,1)) + plot_annotation(tag_levels = 'a') 
+p_final 
+
+test <- chisq.test(table(df$Treatment_Thematic, df$QualDirection))
+test
+test <- chisq.test(table(df$Response.Level, df$QualDirection))
+test
+```
+
+**Outcome of chi-squared tests:** significant differences between driving processes and direction of change, and between population scales and direction of change.
+
+### 3.3. Figure 5. Count of studies reporting a promoting, reducing and no effect of a driving process when assessed at different population scales, and using different metrics of change.
+
+```{r}
+# Graph a. Population scales
+df_y <- df %>%
+  group_by(Treatment_Thematic, Metric.Aggregate, QualDirection) %>%
+  summarise(Count = n_distinct(UniqueCode)) # Filter by metric
+colours <- c("#0072B2", "#009E73", "#D55E00", "#56B4E9" ) # ID colours
+# Make the "Reduce" a negative value 
+df_y$Treatment_Thematic <- factor(df_y$Treatment_Thematic, 
+                                      levels = c("Tourism", 
+                                                 "Soil / substrate", 
+                                                 "Grazing", 
+                                                 "Fire + Grazing", 
+                                                 "Fire + Exotic species planted, fertiliser applied",
+                                                 "Fire + Climate change", 
+                                                 "Fire", 
+                                                 "Climate change + Grazing", 
+                                                 "Climate change"))
+df_y_neg <- df_y %>% 
+  mutate(
+    Count = case_when(
+      QualDirection == "Reduce"  ~ -Count,
+      TRUE ~ Count
+    ),) 
+df_y_neg2 <- df_y_neg %>% 
+  filter(!is.na(Treatment_Thematic))
+df_y_neg$Treatment2 <- str_wrap(df_y_neg$Treatment_Thematic, width = 20)
+p_metric <- df_y_neg2 %>% 
+  ggplot(aes(x = Treatment_Thematic, y = Count, fill = QualDirection)) +
+  geom_bar(position = "stack", stat = "identity") +
+  scale_fill_manual(values = colours) +
+  theme_classic() +
+  coord_flip() +  # Flip axes
+  facet_wrap(vars(Metric.Aggregate)) +  # Flexible scaling for facets
+  theme(        panel.spacing = unit(2, "lines")) + guides(fill=guide_legend(title="Direction of change")) + ylab("Count of studies") + xlab("Driving process") + ylim (-20, 20) +
+  ggtitle("Differentiated by response metric") +
+  scale_x_discrete(labels = function(x) str_wrap(x, width = 20))
+p_metric
+
+# Graph b. Metrics of change
+df_y <- df %>%
+  group_by(Treatment_Thematic, Response.Level, QualDirection) %>%
+  summarise(Count = n_distinct(UniqueCode)) # Filter by metric
+colours <- c("#0072B2", "#009E73", "#D55E00", "#56B4E9" ) # ID colours
+df_y <- df_y %>% 
+  filter(!is.na(Treatment_Thematic))
+unique(df_y$Treatment_Thematic)
+df_y$Treatment_Thematic <- factor(df_y$Treatment_Thematic, 
+                                      levels = c("Tourism", 
+                                                 "Soil / substrate", 
+                                                 "Grazing", 
+                                                 "Fire + Grazing", 
+                                                 "Fire + Exotic species planted, fertiliser applied",
+                                                 "Fire + Climate change", 
+                                                 "Fire", 
+                                                 "Climate change + Grazing", 
+                                                 "Climate change"))
+# Make the "Reduce" a negative value 
+df_y_neg <- df_y %>% 
+  mutate(
+    Count = case_when(
+      QualDirection == "Reduce"  ~ -Count,
+      TRUE ~ Count
+    ),) 
+df_y_neg$Treatment2 <- str_wrap(df_y_neg$Treatment_Thematic, width = 20)
+p_poplevel <- df_y_neg %>% 
+  ggplot(aes(x = Treatment_Thematic, y = Count, fill = QualDirection)) +
+  geom_bar(position = "stack", stat = "identity") +
+  scale_fill_manual(values = colours) +
+  theme_classic() +
+  coord_flip() +  # Flip axes
+  facet_wrap(vars(Response.Level)) +  # Flexible scaling for facets
+  theme(        panel.spacing = unit(2, "lines")) + guides(fill=guide_legend(title="Direction of change")) + ylab("Count of studies") + xlab("Driving process") + ylim (-20, 20) +
+  ggtitle("Differentiated by population scale") +
+  scale_x_discrete(labels = function(x) str_wrap(x, width = 20))
+p_poplevel  
+
+
+# Test of significant differences using chi-squared
+test <- chisq.test(table(df$Response.Level, df$QualDirection))
+test
+
+test <- chisq.test(table(df$Response.Level, df$Treatment_Thematic))
+test
+
+test <- chisq.test(table(df$Metric.Aggregate, df$QualDirection))
+test
+```
+
+**Outcome of chi-squared tests:** No significant differences in reported outcome and the metric of change used. Significant differences between population scale and direction of change, population scale and driving process assessed.
+
+### 3.4. Figure 6. Count of studies reporting a promoting, reducing and no effect of a driving process when assessed in different ecosystem types.
+
+```{r}
+df_y <- df %>%
+  group_by(Treatment_Thematic, Aggregate.InitialES, QualDirection) %>%
+  summarise(Count = n_distinct(UniqueCode)) # Filter by metric
+colours <- c("#0072B2", "#009E73", "#D55E00" ) # ID colours
+head(df_y)
+df_y <- df_y %>% 
+  filter(!is.na(Treatment_Thematic))
+unique(df_y$Treatment_Thematic)
+df_y$Treatment_Thematic <- factor(df_y$Treatment_Thematic, 
+                                      levels = c("Tourism", 
+                                                 "Soil / substrate", 
+                                                 "Grazing", 
+                                                 "Fire + Grazing", 
+                                                 "Fire + Exotic species planted, fertiliser applied",
+                                                 "Fire + Climate change", 
+                                                 "Fire", 
+                                                 "Climate change + Grazing", 
+                                                 "Climate change"))
+# Make the "Reduce" a negative value 
+df_y_neg <- df_y %>% 
+  mutate(
+    Count = case_when(
+      QualDirection == "Reduce"  ~ -Count,
+      TRUE ~ Count
+    ),)
+df_y_neg$Treatment2 <- str_wrap(df_y_neg$Treatment_Thematic, width = 20)
+p_ES <-
+  ggplot(data = subset(df_y_neg, !is.na(Treatment_Thematic)), aes(x = Treatment_Thematic, y = Count, fill = QualDirection)) +
+  geom_bar(position = "stack", stat = "identity") + #, show.legend = FALSE) +
+  scale_fill_manual(values = colours) +
+  theme_classic() +
+  coord_flip() +  # Flips the axes
+  facet_wrap(vars(Aggregate.InitialES)) +
+  guides(fill=guide_legend(title="Response")) +
+  ggtitle("Differentiated by ecosystem type") +
+  scale_x_discrete(labels = function(x) str_wrap(x, width = 20))
+p_ES <- p_ES + ylab("Count of studies") + xlab("Driving process") 
+p_ES
+
+test <- chisq.test(table(df$Aggregate.InitialES, df$QualDirection))
+test
+```
+
+**Outcome:** significant differences between ecosystem types, and the number of studies reporting a promoting, reducing or no effect on shrubs.

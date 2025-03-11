@@ -1,0 +1,860 @@
+---
+title: "S1.9"
+author: "Clare Vernon"
+date: "2025-03-11"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+### 1.1. Install packages, and load packages into library.
+
+May need to install the following packages: install.packages("rnaturalearth") install.packages("rnaturalearthdata") install.packages("ggspatial") install.packages("giscoR") install.packages("maps") install.packages("ggrepel") install.packages("maps") install.packages("ggrepel") install.packages("writexl") install.packages("MuMIn") install.packages("car") install.packages("doBy") install.packages("reshape2") install.packages(esc) install.packages("GGally") install.packages("ggtext") install.packages("ozmaps") install.packages("metafor") install.packages("clubSandwich")
+
+Package for drawing NSW / Victorian borders: install.packages("devtools") devtools::install_github("thomasp85/patchwork") install.packages("meta") install.packages("dmetar") install.packages("esc")
+
+Needed for Orchard, see <https://daniel1noble.github.io/orchaRd/introduction> rm(list = ls()) devtools::install_github("daniel1noble/orchaRd", ref = "main", force = TRUE) pacman::p_load(devtools, tidyverse, metafor, patchwork, R.rsp, orchaRd, emmeans, ape, phytools, flextable)
+
+Once installed, load packages into library.
+
+```{r}
+library("ggplot2")
+library("sf")
+library("rnaturalearth")
+library("rnaturalearthdata")
+library("ggspatial")
+library("giscoR")
+library("dplyr")
+library("maps")
+library("ggrepel")
+library("tidyr")
+library("reshape2")
+library("dplyr")
+library("stringr")
+library(see)
+library(MuMIn)
+library(car)
+library(doBy)
+library(forcats)
+library(writexl)
+library(ggtext)
+library(patchwork)
+library("cowplot")
+library(orchaRd)
+library(emmeans)
+library(flextable)
+library(devtools)
+library(meta)
+library(dmetar)
+library(esc)
+library(clubSandwich)
+library("metafor")
+
+
+# Load data
+library(readr)
+df <- read_csv("S2.3 Dataset of results included in systematic review meta-analysis.csv")
+
+# Create unique identifier for later on
+df$AuthorStudyID <-  paste(df$`CADIMA Ref`, df$Author, df$`Study ID`, sep = "_")
+
+# Remove any NA
+df$Record.type <- df$StudyType
+df$Record.type <- str_replace(df$Record.type, "Unpublished", "Private dataset")
+```
+
+### 1.2. Extract studies for meta-analysis and data checking. 
+Extract studies using metric of cover-abundance, select values where effect sizes can be calculated
+
+```{r}
+# Relevel for display of forest plots
+df$Treatment_Thematic <- factor(df$Treatment_Thematic, 
+                                      levels = c("Tourism", 
+                                                 "Soil / substrate", 
+                                                 "Grazing", 
+                                                 "Fire + Grazing", 
+                                                 "Fire + Exotic species planted, fertiliser applied",
+                                                 "Fire + Climate change", 
+                                                 "Fire", 
+                                                 "Climate change + Grazing", 
+                                                 "Climate change"))
+
+df$Response.Level <- factor(df$Response.Level, 
+                            levels = c("Shrub", 
+                                       "Species", 
+                                       "Community / Ecosystem"))
+df$Aggregate.InitialES <- factor(df$Aggregate.InitialES, 
+                            levels = c("Snowpatch" , 
+"Multiple" ,
+"Heathland (wet) / Grassland",
+"Heathland (wet)" , 
+"Heathland (dry) / Grassland", 
+"Heathland (dry)", 
+"Grassland (wet) / Herbfield",                
+"Grassland (dry) / Herbfield" ,                           
+"Cushion heathland / Fjaledmark"))
+
+df_1 <- df # this is the "all results" df
+df_1 <- df_1 %>% filter (Metric.Aggregate == "Cover-abundance") # Only filter out cover-abundance 
+
+#How many studies are being excluded because insufficient information was reported to allow effect size calculation?
+df_1exclude <- df_1 %>% filter (d.stat2 == "Exclude")
+dim(df_1exclude) # 27 studies excluded 
+
+# Restrict dataset to d(RM) and d(IG) studies
+df_ma <- df_1 %>% filter (QualQuantInc == "Quant+Qual") # Select only quant and qual studies
+df_ma <- df_ma %>% filter (d.stat2 != "Exclude")
+dim(df_ma)
+```
+
+Check all variables in the dataframe are formatted correctly. 
+```{r}
+df_ma$n.c. <- as.numeric(df_ma$n.c.)
+df_ma$n.e. <- as.numeric(df_ma$n.e.)
+df_ma$TE <- as.numeric(df_ma$TE)
+df_ma$PubYear <- as.numeric(df_ma$PubYear)
+df_ma$se.TE <- as.numeric(df_ma$se.TE)
+df_ma$w.time <- as.numeric(df_ma$w.time)
+df_ma$bias.timelag <- as.numeric(df_ma$bias.timelag)
+df_ma$se.TE <- abs(df_ma$se.TE)
+df_ma$se.TE_original <- df_ma$se.TE
+df_ma$se.TE <- ifelse(df_ma$se.TE_original< 1e-8, 1e-8, df_ma$se.TE_original) # Add very small values to 0 to avoid convergence issues 
+```
+
+### 1.3. Count data of studies included in the meta-analysis. 
+```{r}
+# How many reports were included in the meta-analysis dataset? 
+x <- df_ma %>%
+  group_by(Journal) %>%
+  summarise(Count = n_distinct(Study))
+t.x <- as.data.frame(x)
+sum(x$Count)
+
+# How many unique studies were included in the meta-analysis dataset? 
+x <- df_ma %>%
+  group_by(Journal) %>%
+  summarise(Count = n_distinct(UniqueCode))
+t.x <- as.data.frame(x)
+sum(x$Count)
+
+# How many studies, for a given driving processes were identified in the meta-analysis dataset? 
+x <- df_ma %>%
+  group_by(Treatment_Thematic) %>%
+  summarise(Count = n_distinct(UniqueCode))
+t.x <- as.data.frame(x)
+sum(x$Count)
+
+# How many reports, for a given driving processes were identified in the meta-analysis dataset? 
+x <- df_ma %>%
+  group_by(Treatment_Thematic) %>%
+  summarise(Count = n_distinct(Study))
+t.x <- as.data.frame(x)
+sum(x$Count)
+x
+
+# How many studies for a given ecosystem type were identified in the meta-analysis dataset? 
+x <- df_ma %>%
+  group_by(Aggregate.InitialES) %>%
+  summarise(Count = n_distinct(UniqueCode))
+t.x <- as.data.frame(x)
+sum(x$Count)
+x
+
+# How many reports for a given ecosystem type were identified in the meta-analysis dataset? 
+x <- df_ma %>%
+  group_by(Aggregate.InitialES) %>%
+  summarise(Count = n_distinct(Study))
+t.x <- as.data.frame(x)
+sum(x$Count)
+
+# How many studies were conducted in each region represented by the meta-analysis dataset? 
+x <- df_ma %>%
+  group_by(studysite.sa) %>%
+  summarise(Count = n_distinct(Study), Count2 = n_distinct(UniqueCode))
+t.x <- as.data.frame(x)
+sum(x$Count)
+
+# How many studies, from each report were conducted at each population scale, and what was the reported outcome?
+x <- df_ma %>%
+  group_by(Response.Level) %>%
+  summarise(Count = n_distinct(Study), Count2 = n_distinct(UniqueCode), Count3 = n_distinct(Response))
+t.x <- as.data.frame(x)
+sum(x$Count)
+unique(df$Response.Level)
+```
+
+### 1.4. Developing multi-level meta-regression models to assess driving process, population scale and ecosystem type. 
+We followed Harrer et al., 2022, available here: https://bookdown.org/MathiasHarrer/Doing_Meta_Analysis_in_R/multilevel-ma.html. 
+
+#### 1.4.1. Testing values of rho (correlation coefficient). 
+```{r}
+# Step 1 Test rho = 0.05 
+VCV <- vcalc(vi = se.TE, 
+             cluster = Study, 
+             rho = 0.05, 
+             obs = TE, 
+             data = df_ma)
+m.t.0.05 <- rma.mv(TE ~ 1 +  Treatment_Thematic, 
+                   V = VCV, 
+                   data = df_ma,
+                   sparse = TRUE, 
+                     random = ~ 1 | Study/UniqueCode)
+summary(m.t.0.05)
+
+# Step 2 Test rho = 0.3 
+VCV <- vcalc(vi = se.TE, 
+             cluster = Study, 
+             rho = 0.3, 
+             obs = TE, 
+             data = df_ma)
+m.t.0.3 <- rma.mv(TE ~ 1 +  Treatment_Thematic, 
+                   V = VCV, 
+                   data = df_ma,
+                   sparse = TRUE, 
+                     random = ~ 1 | Study/UniqueCode)
+
+# Step 3 Test rho = 0.6 
+VCV <- vcalc(vi = se.TE, 
+             cluster = Study, 
+             rho = 0.6, 
+             obs = TE, 
+             data = df_ma)
+m.t.0.6 <- rma.mv(TE ~ 1 +  Treatment_Thematic, 
+                   V = VCV, 
+                   data = df_ma,
+                   sparse = TRUE, 
+                     random = ~ 1 | Study/UniqueCode)
+
+
+# Step 4. Testing performance
+AIC(m.t.0.05, m.t.0.3, m.t.0.6 )
+# rho 0.3 - 0.05 seems to work best. Start narrowing down.... 
+
+VCV <- vcalc(vi = se.TE, 
+             cluster = Study, 
+             rho = 0.1, 
+             obs = TE, 
+             data = df_ma)
+m.t.0.1 <- rma.mv(TE ~ 1 +  Treatment_Thematic, 
+                   V = VCV, 
+                   data = df_ma,
+                   sparse = TRUE, 
+                     random = ~ 1 | Study/UniqueCode)
+AIC(m.t.0.05, m.t.0.3, m.t.0.1) # 0.3 is still better
+
+
+# rho 0.25
+VCV <- vcalc(vi = se.TE, 
+             cluster = Study, 
+             rho = 0.25, 
+             obs = TE, 
+             data = df_ma)
+m.t.0.25 <- rma.mv(TE ~ 1 +  Treatment_Thematic, 
+                   V = VCV, 
+                   data = df_ma,
+                   sparse = TRUE, 
+                     random = ~ 1 | Study/UniqueCode)
+AIC(m.t.0.05, m.t.0.3, m.t.0.1, m.t.0.25) # 0.3 is still better
+
+# rho 0.27
+VCV <- vcalc(vi = se.TE, 
+             cluster = Study, 
+             rho = 0.27, 
+             obs = TE, 
+             data = df_ma)
+m.t.0.27 <- rma.mv(TE ~ 1 +  Treatment_Thematic, 
+                   V = VCV, 
+                   data = df_ma,
+                   sparse = TRUE, 
+                     random = ~ 1 | Study/UniqueCode)
+AIC(m.t.0.05, m.t.0.3, m.t.0.1, m.t.0.25, m.t.0.27 ) # 0.3 is still better
+
+
+# rho 0.31
+VCV <- vcalc(vi = se.TE, 
+             cluster = Study, 
+             rho = 0.31, 
+             obs = TE, 
+             data = df_ma)
+m.t.0.31 <- rma.mv(TE ~ 1 +  Treatment_Thematic, 
+                   V = VCV, 
+                   data = df_ma,
+                   sparse = TRUE, 
+                     random = ~ 1 | Study/UniqueCode)
+summary(m.t.0.31)
+AIC(m.t.0.05, m.t.0.3, m.t.0.1, m.t.0.25, m.t.0.27, m.t.0.31 ) # 0.3 is still better
+
+# rho 0.29
+VCV <- vcalc(vi = se.TE, 
+             cluster = Study, 
+             rho = 0.29, 
+             obs = TE, 
+             data = df_ma)
+m.t.0.29 <- rma.mv(TE ~ 1 +  Treatment_Thematic, 
+                   V = VCV, 
+                   data = df_ma,
+                   sparse = TRUE, 
+                     random = ~ 1 | Study/UniqueCode)
+AIC(m.t.0.05, m.t.0.3, m.t.0.1, m.t.0.25, m.t.0.27, m.t.0.31, m.t.0.29 ) # 0.3 is still better
+
+# rho 0.28
+VCV <- vcalc(vi = se.TE, 
+             cluster = Study, 
+             rho = 0.28, 
+             obs = TE, 
+             data = df_ma)
+m.t.0.28 <- rma.mv(TE ~ 1 +  Treatment_Thematic, 
+                   V = VCV, 
+                   data = df_ma,
+                   sparse = TRUE, 
+                     random = ~ 1 | Study/UniqueCode)
+AIC(m.t.0.05, m.t.0.3, m.t.0.1, m.t.0.25, m.t.0.27, m.t.0.31, m.t.0.29, m.t.0.28) # 0.3 is still better
+```
+Outcome: rho = 0.29 is the best model (lowest AIC). "m.final" had the better model performace. Given SE varies from 0.00 - 83.0, will stick with m.final). Switching out rho = 0.05 to larger numbers still results in m.final being several values lower AIC than m.t.1.
+
+#### 1.4.2. Pooled Model
+```{r}
+m.final.pooled <- rma.mv(TE ~ 1 +  1, 
+                   V = VCV, 
+                   data = df_ma,
+                   sparse = TRUE, 
+                     random = ~ 1 | Study/UniqueCode)
+summary(m.final.pooled)
+
+# Calculation of i2 values using code from metafor project: https://www.metafor-project.org/doku.php/tips:i2_multilevel_multivariate
+res <- m.final.pooled
+W <- diag(1/res$vi)
+X <- model.matrix(res)
+P <- W - W %*% X %*% solve(t(X) %*% W %*% X) %*% t(X) %*% W
+100 * sum(res$sigma2) / (sum(res$sigma2) + (res$k-res$p)/sum(diag(P))) # total I2
+100 * res$sigma2 / (sum(res$sigma2) + (res$k-res$p)/sum(diag(P))) # between and within I2
+100 - (67.69537 + 32.30437) # I2 due to sampling error 
+
+```
+
+#### 1.4.3. Driving Process Model
+```{r}
+# rho 0.29, moderator
+VCV <- vcalc(vi = se.TE, 
+             cluster = Study, 
+             rho = 0.29, 
+             obs = TE, 
+             data = df_ma)
+m.final <- rma.mv(TE ~ 1 +  Treatment_Thematic, 
+                   V = VCV, 
+                   data = df_ma,
+                   sparse = TRUE, 
+                     random = ~ 1 | Study/UniqueCode)
+summary(m.final)
+
+# Calculation of i2 values using code from metafor project: https://www.metafor-project.org/doku.php/tips:i2_multilevel_multivariate
+summary(m.final)
+res <- m.final
+W <- diag(1/res$vi)
+X <- model.matrix(res)
+P <- W - W %*% X %*% solve(t(X) %*% W %*% X) %*% t(X) %*% W
+100 * sum(res$sigma2) / (sum(res$sigma2) + (res$k-res$p)/sum(diag(P))) # total I2
+100 * res$sigma2 / (sum(res$sigma2) + (res$k-res$p)/sum(diag(P))) # between and within I2
+100 - (62.61131+37.38824) # I2 due to sampling error 
+```
+
+Figure 7. Orchard plot of Pooled Model, and Driving Process Model. 
+Following tutorial buy Daniel Noble, here: 
+https://daniel1noble.github.io/orchaRd/
+```{r}
+# 1. Visualising all results using pooled model 
+model_results_0 <- orchaRd::mod_results(m.final.pooled, mod = "1", at = NULL, group = "UniqueCode")
+p.all <- orchaRd::orchard_plot(model_results_0, mod = "1", group = "StudyNo", xlab = "Standardised mean difference",
+                             angle = 0, g = FALSE, 
+                             transfm = "none", twig.size = 0.5, trunk.size = 1) # All effect sizes
+
+# 2. Visualising by biological level of organisation (Response.Level)
+# Subgroup, all disturbance by response level
+# UniqueCode (study within each record) is non-independence. The m.final found disturbance effects, however, 
+# we could fit Response.Level (population level) as a fixed effect and explore result with Orchard Plot. 
+# See e.g. 4.3. for this: https://daniel1noble.github.io/orchaRd/
+m.final.pooled.poplevel <- rma.mv(TE ~ 1 +  Response.Level, 
+                   V = VCV, 
+                   data = df_ma,
+                   sparse = TRUE, 
+                     random = ~ 1 | Study/UniqueCode) # Redo model to allow for 
+model_results <- orchaRd::mod_results(m.final.pooled.poplevel, mod = "Response.Level", group = "UniqueCode")
+
+p.all.poplevel <- orchaRd::orchard_plot(model_results , mod = "Response.Level", xlab = "Standardised mean difference")
+
+p.all
+p.all.poplevel
+
+
+# 2. Visualising results specific to disturbance
+I2 <- orchaRd::i2_ml(m.final)
+I2                     
+model_results <- orchaRd::mod_results(m.final, mod = "Treatment_Thematic", at = NULL, group = "UniqueCode")
+p1a <- orchaRd::orchard_plot(model_results, mod = "Treatment_Thematic", group = "UniqueCode", xlab = "Standardised mean difference", angle = 0, g = FALSE)
+p1a 
+
+p.all
+p1a
+
+(p.all | p1a) + plot_annotation(tag_levels = 'a') 
+```
+
+#### 1.4.4. Ecosystem Model, and Driving Process - Ecosystem Model 
+```{r}
+# Ecosystem Model
+m.ES.cc <- rma.mv(TE ~ 1 + Aggregate.InitialES, # Moderator is the variable of interest 
+                   V = VCV, 
+                   data = df_ma,
+                   sparse = TRUE, 
+                     random = ~ 1 | Study/UniqueCode)
+AIC(m.ES.cc) 
+summary(m.ES.cc)
+res <- m.ES.cc 
+W <- diag(1/res$vi)
+X <- model.matrix(res)
+P <- W - W %*% X %*% solve(t(X) %*% W %*% X) %*% t(X) %*% W
+100 * sum(res$sigma2) / (sum(res$sigma2) + (res$k-res$p)/sum(diag(P))) # total I2
+100 * res$sigma2 / (sum(res$sigma2) + (res$k-res$p)/sum(diag(P))) # between and within I2
+
+# Visualising using forest plot
+model_results <- orchaRd::mod_results(m.ES.cc, mod = "Aggregate.InitialES", at = NULL, group = "UniqueCode")
+p1a <- orchaRd::orchard_plot(m.ES.cc, mod = "Aggregate.InitialES", group = "UniqueCode", xlab = "Standardised mean difference", angle = 0, g = FALSE)
+p1a 
+
+# Driving Process - Ecosystem Model
+unique(df_ma$Aggregate.InitialES)
+m.ES.trt <- rma.mv(TE ~ 1 + Treatment_Thematic * Aggregate.InitialES, # Moderator is the variable of interest 
+                   V = VCV, 
+                   data = df_ma,
+                   sparse = TRUE, 
+                     random = ~ 1 | Study/UniqueCode, 
+                  tdist = TRUE)
+summary(m.ES.trt)
+AIC(m.ES.trt)
+res <- m.ES.trt
+W <- diag(1/res$vi)
+X <- model.matrix(res)
+P <- W - W %*% X %*% solve(t(X) %*% W %*% X) %*% t(X) %*% W
+100 * sum(res$sigma2) / (sum(res$sigma2) + (res$k-res$p)/sum(diag(P))) # total I2
+100 * res$sigma2 / (sum(res$sigma2) + (res$k-res$p)/sum(diag(P))) # between and within I2
+100 - (62.61131+37.38824) # I2 due to sampling error 
+
+```
+
+#### 1.4.5. Population Model, and Driving Process - Population Model 
+```{r}
+# Population Model
+m.pop <- rma.mv(TE ~ 1 + Response.Level, # Moderator is the variable of interest 
+                   V = VCV, 
+                   data = df_ma,
+                   sparse = TRUE, 
+                     random = ~ 1 | Study/UniqueCode)
+summary(m.pop)
+AIC(m.pop )
+res <- m.pop 
+W <- diag(1/res$vi)
+X <- model.matrix(res)
+P <- W - W %*% X %*% solve(t(X) %*% W %*% X) %*% t(X) %*% W
+100 * sum(res$sigma2) / (sum(res$sigma2) + (res$k-res$p)/sum(diag(P))) # total I2
+100 * res$sigma2 / (sum(res$sigma2) + (res$k-res$p)/sum(diag(P))) # between and within I2
+100 - ( 67.72084 + 32.27882) # I2 due to sampling error
+model_results <- orchaRd::mod_results(m.pop, mod = "Response.Level", at = NULL, group = "UniqueCode")
+p1a <- orchaRd::orchard_plot(m.pop, mod = "Response.Level", group = "UniqueCode", xlab = "Standardised mean difference", angle = 0, g = FALSE)
+p1a 
+
+# Driving Process - Population Model 
+unique(df_ma$Aggregate.InitialES)
+m.ES.trt <- rma.mv(TE ~ 1 + Treatment_Thematic * Response.Level, # Moderator is the variable of interest 
+                   V = VCV, 
+                   data = df_ma,
+                   sparse = TRUE, 
+                     random = ~ 1 | Study/UniqueCode, 
+                  tdist = TRUE)
+summary(m.ES.trt)
+AIC(m.ES.trt)
+res <- m.ES.trt
+W <- diag(1/res$vi)
+X <- model.matrix(res)
+P <- W - W %*% X %*% solve(t(X) %*% W %*% X) %*% t(X) %*% W
+100 * sum(res$sigma2) / (sum(res$sigma2) + (res$k-res$p)/sum(diag(P))) # total I2
+100 * res$sigma2 / (sum(res$sigma2) + (res$k-res$p)/sum(diag(P))) # between and within I2
+100 - (62.61131+37.38824) # I2 due to sampling error
+```
+
+#### 1.4.6. Assessment of publication bias in Driving Process Model, Ecosystem Model, Population Model, Driving Process - Population Model and Driving Process - Ecosystem Model. 
+Note the following references for Egger's Test from Harrer et al., 2002:
+https://osf.io/vqp8u and https://doi.org/10.1037/met0000300. 
+The method below adapts the meta-regression to use the the SE of SMD as the moderator.
+```{r}
+# Funnel plot... 
+meta::funnel(m.final)
+
+# Egger Test
+# This adapts the meta-regression to use the the SE of SMD as the moderator 
+# Ref: https://osf.io/vqp8u and https://doi.org/10.1037/met0000300
+m3.eggertest <- rma.mv(yi = TE, 
+                     V = se.TE^2, 
+                     slab = Study,
+                     data = df_ma,
+                     random = ~ 1 | Study/UniqueCode, # ~ 1 | cluster/effects_within_cluster.
+                     test = "t", 
+                     method = "REML", 
+             mods = ~ se.TE, # this is the egger test, using the SE of SMD as the moderator - this is the measure of precision. 
+             control = list(optimizer = "optim")) # Change omptimiser from nlminb to optim, note that by default, it fits a fixed effects model within a cluster, and random between clusters 
+coef_test(m3.eggertest, vcov = "CR2") # cluster-robust standard errors for the RVE-based test
+
+meta::funnel(m.final, level=c(90, 95, 99), shade=c("white", "gray55", "gray75"), digits=3L, ylim=c(0,10), legend=list(show="cis"))
+se <- seq(0, max(sqrt(df_ma$se.TE)), length=100)
+lines(coef(m3.eggertest)[1] + coef(m3.eggertest)[2]* se, se, lwd=3)
+summary(m3.eggertest) # intercept is the bias estimate, the t-stat, df and p-value show whether aysmetry is significant. 
+```
+
+#### 1.4.7. Sensitivity analysis of Driving Process Model, Ecosystem Model, Population Model, Driving Process - Population Model and Driving Process - Ecosystem Model.  
+```{r}
+# CHE RVE rho = 0.29 
+VCV <- vcalc(vi = se.TE, 
+             cluster = Study, 
+             rho = 0.29, 
+             obs = TE, 
+             data = df_ma)
+
+# Population level
+m.sa <- rma.mv(TE ~ 1 +  Response.Level, # Moderator is the variable of interest 
+                   V = VCV, 
+                   data = df_ma,
+                   sparse = TRUE, 
+                     random = ~ 1 | Study/UniqueCode)
+summary(m.sa) # interested in the QM (showing significant moderator category differences
+
+# Test statistic 
+m.sa <- rma.mv(TE ~ 1 +  d.stat2, # Moderator is the variable of interest 
+                   V = VCV, 
+                   data = df_ma,
+                   sparse = TRUE, 
+                     random = ~ 1 | Study/UniqueCode)
+summary(m.sa) # interested in the QM (showing significant moderator category differences
+
+# Study design
+m.sa <- rma.mv(TE ~ 1 +  `Study design`, # Moderator is the variable of interest 
+                   V = VCV, 
+                   data = df_ma,
+                   sparse = TRUE, 
+                     random = ~ 1 | Study/UniqueCode)
+summary(m.sa) # interested in the QM (showing significant moderator category differences
+
+# Ecosystem type
+m.sa <- rma.mv(TE ~ 1 +  Aggregate.InitialES, # Moderator is the variable of interest 
+                   V = VCV, 
+                   data = df_ma,
+                   sparse = TRUE, 
+                     random = ~ 1 | Study/UniqueCode)
+summary(m.sa) # interested in the QM (showing significant moderator category differences
+
+# Study region
+m.sa <- rma.mv(TE ~ 1 +  site.map, # Moderator is the variable of interest 
+                   V = VCV, 
+                   data = df_ma,
+                   sparse = TRUE, 
+                     random = ~ 1 | Study/UniqueCode)
+summary(m.sa) # interested in the QM (showing significant moderator category differences
+
+# lower elevation
+m.sa <- rma.mv(TE ~ 1 +  elev.lower.sa, # Moderator is the variable of interest 
+                   V = VCV, 
+                   data = df_ma,
+                   sparse = TRUE, 
+                     random = ~ 1 | Study/UniqueCode)
+summary(m.sa) # interested in the QM (showing significant moderator category differences
+
+# upper elevation
+m.sa <- rma.mv(TE ~ 1 +  elev.upper.sa, # Moderator is the variable of interest 
+                   V = VCV, 
+                   data = df_ma,
+                   sparse = TRUE, 
+                     random = ~ 1 | Study/UniqueCode)
+summary(m.sa) # interested in the QM (showing significant moderator category differences
+
+# Timespan
+range(df_ma$se.TE)
+x <- lm(TE ~ timespan, data = df_ma)
+summary(x)$r.squared
+p1 <- df_ma %>% filter (`Study design` != "CI") %>%
+  ggplot(aes(x = as.numeric(timespan), y = as.numeric(TE))) +
+  geom_point(aes(size = se.TE), alpha = 0.5) +
+  theme_classic() + 
+  geom_smooth(method = lm) +
+  ylab("Standardised mean difference") +
+  xlab("Study timespan (years)") +
+  scale_alpha(name = "Standard error, SMD")
+m.sa <- rma.mv(TE ~ 1 +  sa.timespan, # Moderator is the variable of interest 
+                   V = VCV, 
+                   data = df_ma,
+                   sparse = TRUE, 
+                     random = ~ 1 | Study/UniqueCode)
+summary(m.sa) # interested in the QM (showing significant moderator category differences
+```
+
+
+### 1.5. Developing multi-level meta-regression models to assess fire, and life history trait. 
+We followed Harrer et al., 2022, available here: https://bookdown.org/MathiasHarrer/Doing_Meta_Analysis_in_R/multilevel-ma.html. 
+
+Organise the new dataframe. 
+```{r}
+unique(df_ma$Seeder.Resprouter)
+df_x <- df_ma %>%
+  group_by(Seeder.Resprouter) %>%
+  summarise(Count = n_distinct(UniqueCode)) # Number of studies, all clusters (records)
+df_x
+df_ma_fire <- df_ma %>% filter (Seeder.Resprouter ==  "Fire killed" |
+                                 Seeder.Resprouter ==   "Resprouter"|
+                                  Seeder.Resprouter ==  "Both"   |
+                                  Seeder.Resprouter ==  "Seeder / Soil seed bank")
+
+
+df_ma_fire$Seeder.Resprouter <- factor(df_ma_fire $Seeder.Resprouter, 
+                                      levels = c("Seeder / Soil seed bank",
+                                      "Resprouter",
+                                                 "Fire killed",
+                                                 "Both"))
+df_x <- df_ma_fire %>%
+  group_by(Treatment_Thematic) %>%
+  summarise(Count = n_distinct(UniqueCode)) # Number of studies, all clusters (records)
+df_x # Just 3 studies assess Fire + Grazing, omit these
+df_ma_fire2 <- df_ma_fire %>% filter (Treatment_Thematic ==  "Fire")
+df_x <- df_ma_fire2 %>%
+  group_by(Seeder.Resprouter) %>%
+  summarise(Count = n_distinct(UniqueCode)) # Number of studies, all clusters (records)
+df_x
+```
+
+#### 1.5.1. Testing values of rho (correlation coefficient).
+Values of rho < 0.29 (including all negative values) were unable to produce models. FOr example:
+"1: The var-cov matrix appears to be not positive definite in cluster McDougall et al. 2015."
+```{r}
+VCV <- vcalc(vi = se.TE, 
+             cluster = Study, 
+             rho = 0.29, # Smallest rho that doesn't throw error
+             obs = TE, 
+             data =df_ma_fire2)
+m.fire.0.29 <- rma.mv(TE ~ 1 + Seeder.Resprouter, # Moderator is the variable of interest 
+                   V = VCV, 
+                   data = df_ma_fire2,
+                   sparse = TRUE, 
+                     random = ~ 1 | Study/UniqueCode)
+AIC(m.fire.0.29) # interested in the QM (showing significant moderator category differences
+
+VCV <- vcalc(vi = se.TE, 
+             cluster = Study, 
+             rho = -0.1, 
+             obs = TE, 
+             data =df_ma_fire2)
+m.fire.neg.0.1 <- rma.mv(TE ~ 1 + Seeder.Resprouter, # Moderator is the variable of interest 
+                   V = VCV, 
+                   data = df_ma_fire2,
+                   sparse = TRUE, 
+                     random = ~ 1 | Study/UniqueCode)
+AIC(m.fire.0.29,m.fire.neg.0.1) # AIC does not improve if rho increases; use rho = 0.30. 
+
+VCV <- vcalc(vi = se.TE, 
+             cluster = Study, 
+             rho = -0.28, 
+             obs = TE, 
+             data =df_ma_fire2)
+m.fire.neg.0.28 <- rma.mv(TE ~ 1 + Seeder.Resprouter, # Moderator is the variable of interest 
+                   V = VCV, 
+                   data = df_ma_fire2,
+                   sparse = TRUE, 
+                     random = ~ 1 | Study/UniqueCode)
+
+# VCV <- vcalc(vi = se.TE, 
+#              cluster = Study, 
+#              rho = -0.29, 
+#              obs = TE, 
+#              data =df_ma_fire2)
+# m.fire.neg.0.29 <- rma.mv(TE ~ 1 + Seeder.Resprouter, # Moderator is the variable of interest 
+#                    V = VCV, 
+#                    data = df_ma_fire2,
+#                    sparse = TRUE, 
+#                      random = ~ 1 | Study/UniqueCode) # Model failed 
+
+# VCV <- vcalc(vi = se.TE, 
+#              cluster = Study, 
+#              rho = -0.27, 
+#              obs = TE, 
+#              data =df_ma_fire2)
+# m.fire.neg.0.27 <- rma.mv(TE ~ 1 + Seeder.Resprouter, # Moderator is the variable of interest 
+#                    V = VCV, 
+#                    data = df_ma_fire2,
+#                    sparse = TRUE, 
+#                      random = ~ 1 | Study/UniqueCode) # Model failed 
+
+
+AIC(m.fire.0.29,m.fire.neg.0.1, m.fire.neg.0.28) # AIC does not improve if rho increases; use rho = 0.30. 
+```
+
+Decision to use rho = -0.28 in the meta-regression models for fire and life history trait. 
+
+#### 1.5.2. Fire Model
+```{r}
+VCV <- vcalc(vi = se.TE, 
+             cluster = Study, 
+             rho = -0.28, 
+             obs = TE, 
+             data =df_ma_fire2)
+m.fire.mod <- rma.mv(TE ~ 1, # Moderator is the variable of interest 
+                   V = VCV, 
+                   data = df_ma_fire2,
+                   sparse = TRUE, 
+                     random = ~ 1 | Study/UniqueCode)
+summary(m.fire.mod)
+# equivalent pooled model
+summary(m.fire.mod)
+res <- m.fire.mod
+W <- diag(1/res$vi)
+X <- model.matrix(res)
+P <- W - W %*% X %*% solve(t(X) %*% W %*% X) %*% t(X) %*% W
+100 * sum(res$sigma2) / (sum(res$sigma2) + (res$k-res$p)/sum(diag(P))) # total I2
+100 * res$sigma2 / (sum(res$sigma2) + (res$k-res$p)/sum(diag(P))) # between and within I2
+100 - (59.52951 + 40.46998) # I2 due to sampling error 
+n_distinct(df_ma_fire2$UniqueCode)
+```
+
+#### 1.5.3. Fire Trait Model
+```{r}
+VCV <- vcalc(vi = se.TE, 
+             cluster = Study, 
+             rho = -0.28, 
+             obs = TE, 
+             data =df_ma_fire2)
+m.fire <- rma.mv(TE ~ 1 + Seeder.Resprouter, # Moderator is the variable of interest 
+                   V = VCV, 
+                   data = df_ma_fire2,
+                   sparse = TRUE, 
+                     random = ~ 1 | Study/UniqueCode)
+summary(m.fire)
+res <- m.fire
+W <- diag(1/res$vi)
+X <- model.matrix(res)
+P <- W - W %*% X %*% solve(t(X) %*% W %*% X) %*% t(X) %*% W
+100 * sum(res$sigma2) / (sum(res$sigma2) + (res$k-res$p)/sum(diag(P))) # total I2
+100 * res$sigma2 / (sum(res$sigma2) + (res$k-res$p)/sum(diag(P))) # between and within I2
+100 - (66.72467 + 33.27412) # I2 due to sampling error 
+n_distinct(df_ma_fire2$UniqueCode)
+
+```
+
+#### 1.5.4. Forest plots of Fire Model, and Fire Trait Model.
+```{r}
+
+# Orchart and funnel plots
+# Moderator
+model_results <- orchaRd::mod_results(m.fire, mod = "1", at = NULL, group = "UniqueCode")
+pa <- orchaRd::orchard_plot(model_results, mod = "1", group = "UniqueCode", xlab = "Standardised mean difference", angle = 0, g = FALSE) # pooled
+pa 
+model_results <- orchaRd::mod_results(m.fire, mod = "Seeder.Resprouter", at = NULL, group = "UniqueCode")
+p1a <- orchaRd::orchard_plot(model_results, mod = "Treatment_Thematic", group = "UniqueCode", xlab = "Standardised mean difference", angle = 0, g = FALSE) # contrast seeder / resprouter etc
+p1a 
+pa + p1a +  plot_annotation(tag_levels = 'a') 
+
+
+pb <- orchaRd::caterpillars(model_results, mod = "1", xlab = "Standardised mean difference")  # pooled
+p1b <- orchaRd::caterpillars(model_results, mod = "Treatment_Thematic", xlab = "Standardised mean difference") # contrast seeder / resprouter etc
+p1b
+
+```
+
+#### 1.5.5. Assessment of Publication Bias in Fire Model, and Fire Trait Model. 
+```{r}
+meta::funnel(m.fire)
+m.fire.eggertest <- rma.mv(yi = TE, 
+                     V = se.TE^2, 
+                     slab = Study,
+                     data = df_ma_fire,
+                     random = ~ 1 | Study/UniqueCode, # ~ 1 | cluster/effects_within_cluster.
+                     test = "t", 
+                     method = "REML", 
+             mods = ~ se.TE, # this is the egger test, using the SE of SMD as the moderator - this is the measure of precision. 
+             control = list(optimizer = "optim")) # Change omptimiser from nlminb to optim, note that by default, it fits a fixed effects model within a cluster, and random between clusters 
+coef_test(m.fire.eggertest, vcov = "CR2") # cluster-robust standard errors for the RVE-based test
+
+meta::funnel(m.fire, level=c(90, 95, 99), shade=c("white", "gray55", "gray75"), digits=3L, ylim=c(0,10), legend=list(show="cis"))
+se <- seq(0, max(sqrt(df_ma_fire$se.TE)), length=100)
+lines(coef(m.fire.eggertest)[1] + coef(m.fire.eggertest)[2]* se, se, lwd=3)
+summary(m.fire.eggertest) # intercept is the bias estimate, the t-stat, df and p-value show whether aysmetry is significant. 
+
+```
+
+
+#### 1.5.6. Sensitivity analysis in the Fire Model, and Fire Trait Model. 
+```{r}
+# Test statistic 
+m.sa.test <- rma.mv(TE ~ 1 +  d.stat2, # Moderator is the variable of interest 
+                   V = VCV, 
+                   data = df_ma_fire2,
+                   sparse = TRUE, 
+                     random = ~ 1 | Study/UniqueCode)
+summary(m.sa.test) # interested in the QM (showing significant moderator category differences
+
+# Study design
+unique(df_ma_fire$`Study design`)
+m.sa.design <- rma.mv(TE ~ 1 +  `Study design`, # Moderator is the variable of interest 
+                   V = VCV, 
+                   data = df_ma_fire2,
+                   sparse = TRUE, 
+                     random = ~ 1 | Study/UniqueCode)
+summary(m.sa.design) # interested in the QM (showing significant moderator category differences
+
+# Ecosystem type
+unique(df_ma_fire$Aggregate.InitialES) # Simplified as too many categories to allow correlation coefficient calc. 
+m.sa <- rma.mv(TE ~ 1 +  Aggregate.InitialES2, # Moderator is the variable of interest 
+                   V = VCV, 
+                   data = df_ma_fire2,
+                   sparse = TRUE, 
+                     random = ~ 1 | Study/UniqueCode)
+summary(m.sa) # interested in the QM (showing significant moderator category differences
+
+# Study region
+m.sa <- rma.mv(TE ~ 1 +  studysite.sa, # Moderator is the variable of interest 
+                   V = VCV, 
+                   data = df_ma_fire2,
+                   sparse = TRUE, 
+                     random = ~ 1 | Study/UniqueCode)
+summary(m.sa) # interested in the QM (showing significant moderator category differences
+
+# Timespan
+m.sa <- rma.mv(TE ~ 1 +  sa.timespan, # Moderator is the variable of interest 
+                   V = VCV, 
+                   data = df_ma_fire2,
+                   sparse = TRUE, 
+                     random = ~ 1 | Study/UniqueCode)
+summary(m.sa) # interested in the QM (showing significant moderator category differences
+
+# Lower elev
+m.sa <- rma.mv(TE ~ 1 +  Elev_Est_Lower, # Moderator is the variable of interest 
+                   V = VCV, 
+                   data = df_ma_fire2,
+                   sparse = TRUE, 
+                     random = ~ 1 | Study/UniqueCode)
+summary(m.sa) # interested in the QM (showing significant moderator category differences
+
+# Upper elev
+m.sa <- rma.mv(TE ~ 1 +  Elev_Est_Upper, # Moderator is the variable of interest 
+                   V = VCV, 
+                   data = df_ma_fire2,
+                   sparse = TRUE, 
+                     random = ~ 1 | Study/UniqueCode)
+summary(m.sa) # interested in the QM (showing significant moderator category differences
+
+# Pub year
+m.sa <- rma.mv(TE ~ 1 +  PubYear, # Moderator is the variable of interest 
+                   V = VCV, 
+                   data = df_ma_fire2,
+                   sparse = TRUE, 
+                     random = ~ 1 | Study/UniqueCode)
+summary(m.sa) # interested in the QM (showing significant moderator category differences
+```
+
